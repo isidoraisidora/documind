@@ -6,6 +6,7 @@ from .config import DATABASE_URL
 
 def init_db(retries: int = 30):
     """Create the extension and table. Retries because the DB may still be starting."""
+    last_error = None
     for _ in range(retries):
         try:
             with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
@@ -20,9 +21,10 @@ def init_db(retries: int = 30):
                     )
                 """)
             return
-        except psycopg.OperationalError:
+        except psycopg.OperationalError as e:
+            last_error = e
             time.sleep(2)
-    raise RuntimeError("Database not reachable")
+    raise RuntimeError(f"Database not reachable: {last_error}")
 
 
 def get_conn():

@@ -6,3 +6,4 @@ pgvector
 pypdf
 fastembed
 groq
+python-dotenv

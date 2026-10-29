@@ -1,7 +1,8 @@
 import io
+from fastapi import HTTPException
 from groq import Groq
 from pypdf import PdfReader
-from .config import GROQ_API_KEY
+from .config import GROQ_API_KEY, LLM_MODEL
 
 _model = None
 
@@ -35,13 +36,16 @@ def ask_llm(question: str, rows) -> str:
         f"[{i + 1}] ({r[0]}, page {r[1]}) {r[2]}" for i, r in enumerate(rows)
     )
     client = Groq(api_key=GROQ_API_KEY)
-    resp = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": (
-                "Answer using only the provided context. Cite sources like [1]. "
-                "If the answer is not in the context, say you don't know.")},
-            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"},
-        ],
-    )
+    try:
+        resp = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": (
+                    "Answer using only the provided context. Cite sources like [1]. "
+                    "If the answer is not in the context, say you don't know.")},
+                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"},
+            ],
+        )
+    except Exception as e:
+        raise HTTPException(502, f"LLM error: {e}")
     return resp.choices[0].message.content
