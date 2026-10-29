@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DocuMind</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    #chat { height: 60vh; overflow-y: auto; }
+    .bubble { max-width: 85%; white-space: pre-wrap; }
+    .source-text { font-size: .85rem; white-space: pre-wrap; }
+  </style>
+</head>
+<body class="bg-body-tertiary">
+
+<nav class="navbar bg-body border-bottom mb-4">
+  <div class="container">
+    <span class="navbar-brand fw-semibold">DocuMind</span>
+    <span class="navbar-text small">Ask questions about your own documents</span>
+  </div>
+</nav>
+
+<main class="container pb-5">
+  <div class="row g-4">
+
+    <!-- Left column: upload + document list -->
+    <div class="col-lg-4">
+      <div class="card shadow-sm mb-4">
+        <div class="card-body">
+          <h2 class="h6 card-title">Upload a document</h2>
+          <p class="text-body-secondary small">PDF or TXT. Uploading a file with the same name replaces it.</p>
+          <input type="file" id="file" class="form-control mb-2" accept=".pdf,.txt">
+          <button id="uploadBtn" class="btn btn-primary w-100">
+            <span id="uploadSpinner" class="spinner-border spinner-border-sm me-2 d-none"></span>
+            <span id="uploadLabel">Upload</span>
+          </button>
+          <div id="uploadMsg" class="mt-3"></div>
+        </div>
+      </div>
+
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h2 class="h6 card-title mb-0">Your documents</h2>
+            <button id="refreshBtn" class="btn btn-sm btn-outline-secondary">Refresh</button>
+          </div>
+          <ul id="docList" class="list-group list-group-flush"></ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right column: conversation -->
+    <div class="col-lg-8">
+      <div class="card shadow-sm">
+        <div class="card-header bg-body d-flex justify-content-between align-items-center">
+          <span class="fw-semibold">Conversation</span>
+          <button id="clearBtn" class="btn btn-sm btn-outline-secondary">Clear</button>
+        </div>
+        <div id="chat" class="card-body d-flex flex-column gap-3">
+          <div id="empty" class="text-body-secondary text-center my-auto">
+            Upload a document, then ask a question about it.
+          </div>
+        </div>
+        <div class="card-footer bg-body">
+          <div class="input-group">
+            <input id="q" type="text" class="form-control" placeholder="Ask a question about your documents">
+            <button id="askBtn" class="btn btn-primary">Ask</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  let sourceCounter = 0;
+
+  // follow the visitor's light or dark preference
+  document.documentElement.setAttribute(
+    'data-bs-theme',
+    window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  );
+
+  function showAlert(el, kind, text) {
+    el.replaceChildren();
+    const div = document.createElement('div');
+    div.className = `alert alert-${kind} py-2 mb-0 small`;
+    div.textContent = text;
+    el.appendChild(div);
+  }
+
+  async function readJson(res) {
+    try { return await res.json(); } catch { return {}; }
+  }
+
+  // ---------- documents ----------
+  async function loadDocuments() {
+    const list = $('docList');
+    list.replaceChildren();
+    try {
+      const res = await fetch('/api/documents');
+      const docs = await readJson(res);
+      if (!res.ok || !Array.isArray(docs)) throw new Error();
+      if (docs.length === 0) {
+        const li = document.createElement('li');
+        li.className = 'list-group-item px-0 text-body-secondary small';
+        li.textContent = 'No documents yet.';
+        list.appendChild(li);
+        return;
+      }
+      docs.forEach(d => {
+        const li = document.createElement('li');
+        li.className = 'list-group-item px-0 d-flex justify-content-between align-items-center';
+        const name = document.createElement('span');
+        name.className = 'text-truncate me-2';
+        name.textContent = d.filename;
+        const badge = document.createElement('span');
+        badge.className = 'badge text-bg-secondary rounded-pill';
+        badge.textContent = `${d.chunks} chunks`;
+        li.append(name, badge);
+        list.appendChild(li);
+      });
+    } catch {
+      const li = document.createElement('li');
+      li.className = 'list-group-item px-0 text-danger small';
+      li.textContent = 'Could not load documents.';
+      list.appendChild(li);
+    }
+  }
+
+  async function upload() {
+    const file = $('file').files[0];
+    if (!file) { showAlert($('uploadMsg'), 'warning', 'Choose a file first.'); return; }
+    const fd = new FormData();
+    fd.append('file', file);
+
+    $('uploadBtn').disabled = true;
+    $('uploadSpinner').classList.remove('d-none');
+    $('uploadLabel').textContent = 'Indexing...';
+    try {
+      const res = await fetch('/api/documents', { method: 'POST', body: fd });
+      const data = await readJson(res);
+      if (res.ok) {
+        showAlert($('uploadMsg'), 'success', `Indexed ${data.chunks} chunks from ${data.filename}.`);
+        $('file').value = '';
+        loadDocuments();
+      } else {
+        showAlert($('uploadMsg'), 'danger', data.detail || 'Upload failed.');
+      }
+    } catch {
+      showAlert($('uploadMsg'), 'danger', 'Could not reach the server.');
+    } finally {
+      $('uploadBtn').disabled = false;
+      $('uploadSpinner').classList.add('d-none');
+      $('uploadLabel').textContent = 'Upload';
+    }
+  }
+
+  // ---------- chat ----------
+  function addBubble(kind, text) {
+    const empty = $('empty');
+    if (empty) empty.remove();
+
+    const row = document.createElement('div');
+    row.className = 'd-flex ' + (kind === 'user' ? 'justify-content-end' : 'justify-content-start');
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble rounded-3 px-3 py-2 ' +
+      (kind === 'user' ? 'bg-primary text-white' : 'bg-body-secondary');
+    bubble.textContent = text;
+    row.appendChild(bubble);
+    $('chat').appendChild(row);
+    $('chat').scrollTop = $('chat').scrollHeight;
+    return bubble;
+  }
+
+  function addSources(bubble, sources) {
+    if (!sources || sources.length === 0) return;
+    const id = 'src' + (sourceCounter++);
+
+    const toggle = document.createElement('button');
+    toggle.className = 'btn btn-sm btn-outline-secondary mt-2';
+    toggle.type = 'button';
+    toggle.setAttribute('data-bs-toggle', 'collapse');
+    toggle.setAttribute('data-bs-target', '#' + id);
+    toggle.textContent = `Show ${sources.length} sources`;
+
+    const box = document.createElement('div');
+    box.className = 'collapse mt-2';
+    box.id = id;
+    sources.forEach((s, i) => {
+      const card = document.createElement('div');
+      card.className = 'border rounded p-2 mb-2 bg-body';
+      const title = document.createElement('div');
+      title.className = 'fw-semibold small';
+      title.textContent = `[${i + 1}] ${s.filename}, page ${s.page}`;
+      const body = document.createElement('div');
+      body.className = 'source-text text-body-secondary';
+      body.textContent = s.content;
+      card.append(title, body);
+      box.appendChild(card);
+    });
+
+    box.addEventListener('show.bs.collapse', () => toggle.textContent = 'Hide sources');
+    box.addEventListener('hide.bs.collapse', () => toggle.textContent = `Show ${sources.length} sources`);
+
+    bubble.append(document.createElement('br'), toggle, box);
+  }
+
+  async function ask() {
+    const question = $('q').value.trim();
+    if (!question) return;
+    $('q').value = '';
+    addBubble('user', question);
+    const thinking = addBubble('bot', 'Thinking...');
+
+    $('askBtn').disabled = true;
+    $('q').disabled = true;
+    try {
+      const res = await fetch('/api/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question })
+      });
+      const data = await readJson(res);
+      if (res.ok) {
+        thinking.textContent = data.answer;
+        addSources(thinking, data.sources);
+      } else {
+        thinking.textContent = data.detail || 'Something went wrong.';
+        thinking.className = 'bubble rounded-3 px-3 py-2 bg-danger-subtle text-danger-emphasis';
+      }
+    } catch {
+      thinking.textContent = 'Could not reach the server.';
+      thinking.className = 'bubble rounded-3 px-3 py-2 bg-danger-subtle text-danger-emphasis';
+    } finally {
+      $('askBtn').disabled = false;
+      $('q').disabled = false;
+      $('q').focus();
+      $('chat').scrollTop = $('chat').scrollHeight;
+    }
+  }
+
+  function clearChat() {
+    $('chat').replaceChildren();
+    const empty = document.createElement('div');
+    empty.id = 'empty';
+    empty.className = 'text-body-secondary text-center my-auto';
+    empty.textContent = 'Upload a document, then ask a question about it.';
+    $('chat').appendChild(empty);
+  }
+
+  $('uploadBtn').addEventListener('click', upload);
+  $('refreshBtn').addEventListener('click', loadDocuments);
+  $('askBtn').addEventListener('click', ask);
+  $('clearBtn').addEventListener('click', clearChat);
+  $('q').addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
+
+  loadDocuments();
+</script>
+</body>
+</html>
